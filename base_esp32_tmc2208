@@ -1,0 +1,138 @@
+#include <WiFi.h> //Some connectivity issues resolved including this library
+
+#include <AccelStepper.h>   // definitely necessary
+#include <MultiStepper.h>   //probably not necessary
+
+#include <TMC2208Stepper.h>       // necessary to create driver object and and control the hardware 
+
+TMC2208Stepper driver = TMC2208Stepper(&Serial1);  // Create driver and use
+
+#include "thingProperties.h" // stuff for connectivity and some variable declarations
+
+#define dirPin 27
+#define stepPin 26
+#define enPin 25
+#define sensePin 10// to be used when adding a homing sensor (HallSensor)
+
+
+
+//main movement variables
+int val = 0; // create value for surrent position
+int previous = 0; // create value for previous position
+int long newval = 0;  // val plus change from previous  // reverts to val later
+
+  
+  //stepper homing variables 
+long initialHoming= 0;  // Used to Home Stepper at startup
+long zeroHoming = 0; // Used in zero out
+
+AccelStepper stepper(AccelStepper::DRIVER, stepPin, dirPin); // declare driver type, in this case TMC2208
+
+void setup() {
+  
+  Serial.begin(9600); // start software serial
+  Serial.println("Start...");
+  Serial1.begin(115200);        // Start hardware serial 1
+  driver.push();                // Reset registers
+
+  WiFi.mode(WIFI_STA); //set esp3 to station mode connect directly to router // shouldnt be necessary but see if solves issue
+  
+ 
+  pinMode(enPin, OUTPUT); // // Prepare stepper pins
+  pinMode(stepPin, OUTPUT);
+  pinMode(dirPin, OUTPUT);
+  
+ 
+  
+  digitalWrite(enPin, HIGH);   // HIGH diables driver in hardware on enPin
+
+  driver.pdn_disable(true);     // Use PDN/UART pin for communication
+  driver.I_scale_analog(false); // Use internal voltage reference
+  driver.rms_current(800);      // Set driver current 600mA
+  driver.toff(2);               // Enable driver in software
+
+  digitalWrite(enPin, LOW);    // Enable driver in hardware
+
+  uint32_t data = 0;
+  Serial.print("DRV_STATUS = 0x");
+  driver.DRV_STATUS(&data);
+  Serial.println(data, HEX);
+  
+  delay(2000); // This delay gives the chance to wait for a Serial Monitor without blocking if none is found
+
+  
+  initProperties();// Defined in thingProperties.h
+
+ 
+  ArduinoCloud.begin(ArduinoIoTPreferredConnection); // Connect to Arduino IoT Cloud
+  
+
+  setDebugMessageLevel(2);
+  ArduinoCloud.printDebugInfo();
+  
+
+ //  Set Max Speed and Acceleration of each Steppers at startup for homing
+  stepper.setMaxSpeed(1000.0);      // Set Max Speed of Stepper (Slower to get better accuracy)
+  stepper.setAcceleration(750.0);  // Set Acceleration of Stepper
+ 
+
+  // Start Homing procedure of Stepper Motor at startup
+  
+  pinMode(sensePin, INPUT); //digital pin to be connected to the HallSensor
+
+  Serial.print("Stepper is Homing . . . . . . . . . . . ");
+
+  while (digitalRead(sensePin)) {  // Make the Stepper move CCW until the switch is activated   
+    stepper.moveTo(initialHoming);  // Set the position to move to
+    initialHoming--;  // Decrease by 1 for next move if needed
+    stepper.run();  // Start moving the stepper
+    delay(5);
+    }
+
+  stepper.setCurrentPosition(0);  // Set the current position as zero for now
+  stepper.setMaxSpeed(600.0);      // Set Max Speed of Stepper (Slower to get better accuracy)
+  stepper.setAcceleration(400.0);  // Set Acceleration of Stepper
+  
+  initialHoming=1;
+
+  while (!digitalRead(sensePin)) { // Make the Stepper move CW until the switch is deactivated
+    stepper.moveTo(initialHoming);  
+    stepper.run();
+    initialHoming++;
+    delay(5);
+ 
+}
+
+  stepper.setCurrentPosition(0);
+  Serial.println("Homing Completed");
+  Serial.println("");
+  
+  stepper.setMaxSpeed(6000); //set stepper speed
+  stepper.setAcceleration(750); // set stepper acceleration
+
+}
+
+void loop() {
+  
+  ArduinoCloud.update(); //update variables
+  
+  delay(100); // Cloud updates .1 seconds (updated14/04/2022)
+  
+}
+
+
+void onPotvalue2Change(){
+  
+  val = potvalue_2;  //  Read change
+  Serial.println(val); //print value for the variable
+  
+ if ((val > previous + 5) || (val < previous - 5)) {  // Check that a move of the pot is at least > or < than 1
+    newval = map(val, 1, 200, 3600, 0);  // Map value (3600 = 2.25 stepper shaft rotations)
+    stepper.runToNewPosition(newval);  // Move stepper to new position
+    previous = val;  // save current value into variable previous
+    
+  }
+  
+delay(5); //as far as i see it, delay is necessary to stop the backlog of data points, millis might not work (havent tried yet)
+
+}
